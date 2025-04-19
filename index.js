@@ -30,6 +30,8 @@ const HOST_URL = process.env.HOST_URL;
 const TOKEN_FILE = path.join(CONFIG_DIR, 'token.json');
 const TOKEN_REFRESH_INTERVAL = 60 * 60 * 1000; // Check token every hour
 const REFRESH_BEFORE_EXPIRY = 15 * 60 * 1000; // Refresh 15 minutes before expiry
+const GLOBAL_IGNORE_FILE = path.join(CONFIG_DIR, 'global_ignore.json');
+const INITIAL_GLOBAL_IGNORE = process.env.GLOBAL_IGNORE_LIST ? process.env.GLOBAL_IGNORE_LIST.split(',').map(name => name.trim().toLowerCase()) : [];
 
 // Rate limiting configuration
 const RATE_LIMIT = {
@@ -44,6 +46,77 @@ const rateLimiters = {
     lastReset: Date.now(),
   },
   channels: {},
+};
+
+// Global ignore list management
+const globalIgnoreManager = {
+  ignoreList: [],
+  
+  // Initialize the global ignore list
+  init() {
+    try {
+      if (fs.existsSync(GLOBAL_IGNORE_FILE)) {
+        const data = fs.readFileSync(GLOBAL_IGNORE_FILE, 'utf8');
+        this.ignoreList = JSON.parse(data);
+        debug(`Loaded ${this.ignoreList.length} users from global ignore list`);
+      } else {
+        // Initialize with values from environment variable
+        this.ignoreList = [...INITIAL_GLOBAL_IGNORE];
+        this.save();
+        debug(`Created global ignore list with ${this.ignoreList.length} initial users`);
+      }
+    } catch (error) {
+      console.error('Error loading global ignore list:', error);
+      // Use initial values if there's an error
+      this.ignoreList = [...INITIAL_GLOBAL_IGNORE];
+    }
+  },
+  
+  // Save the global ignore list
+  save() {
+    try {
+      if (!fs.existsSync(CONFIG_DIR)) {
+        fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      }
+      
+      fs.writeFileSync(GLOBAL_IGNORE_FILE, JSON.stringify(this.ignoreList, null, 2));
+      debug(`Saved global ignore list with ${this.ignoreList.length} users`);
+    } catch (error) {
+      console.error('Error saving global ignore list:', error);
+    }
+  },
+  
+  // Add a user to the global ignore list
+  add(username) {
+    const normalizedName = username.toLowerCase();
+    
+    if (!this.ignoreList.includes(normalizedName)) {
+      this.ignoreList.push(normalizedName);
+      this.save();
+      return true;
+    }
+    
+    return false; // User already in the list
+  },
+  
+  // Remove a user from the global ignore list
+  remove(username) {
+    const normalizedName = username.toLowerCase();
+    const index = this.ignoreList.indexOf(normalizedName);
+    
+    if (index !== -1) {
+      this.ignoreList.splice(index, 1);
+      this.save();
+      return true;
+    }
+    
+    return false; // User not in the list
+  },
+  
+  // Check if a user is in the global ignore list
+  isIgnored(username) {
+    return this.ignoreList.includes(username.toLowerCase());
+  }
 };
 
 // Token management
@@ -480,6 +553,9 @@ async function main() {
       console.error('Error: Missing tokens. Make sure TWITCH_ACCESS_TOKEN and TWITCH_REFRESH_TOKEN are set in .env file');
       process.exit(1);
     }
+    
+    // Initialize global ignore list
+    globalIgnoreManager.init();
 
     // Try to refresh token if needed
     if (tokenManager.needsRefresh()) {
@@ -586,6 +662,67 @@ function setupMessageHandler(chatClient) {
       if (message.startsWith(prefix)) {
         // Check if commands are enabled
         if (!channelConfig.respondToCommands) return;
+        
+        // Special global ignore commands that can only be used by the bot owner or channel owner
+        const isOwner = BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user === channelName;
+        
+        if ((command === 'globalignore' || command === 'gignore') && isOwner) {
+          if (args.length < 1) {
+            chatClient.say(channel, `@${user} Usage: ${prefix}${command} [add/remove/list] [username]`);
+            return;
+          }
+          
+          const action = args[0].toLowerCase();
+          
+          switch(action) {
+            case 'add':
+              if (args.length < 2) {
+                chatClient.say(channel, `@${user} Usage: ${prefix}${command} add [username]`);
+                return;
+              }
+              
+              const userToIgnore = args[1].toLowerCase();
+              if (globalIgnoreManager.add(userToIgnore)) {
+                chatClient.say(channel, `@${user} Added ${userToIgnore} to global ignore list.`);
+              } else {
+                chatClient.say(channel, `@${user} ${userToIgnore} is already in the global ignore list.`);
+              }
+              break;
+              
+            case 'remove':
+              if (args.length < 2) {
+                chatClient.say(channel, `@${user} Usage: ${prefix}${command} remove [username]`);
+                return;
+              }
+              
+              const userToUnignore = args[1].toLowerCase();
+              if (globalIgnoreManager.remove(userToUnignore)) {
+                chatClient.say(channel, `@${user} Removed ${userToUnignore} from global ignore list.`);
+              } else {
+                chatClient.say(channel, `@${user} ${userToUnignore} is not in the global ignore list.`);
+              }
+              break;
+              
+            case 'list':
+              const ignoreList = globalIgnoreManager.ignoreList;
+              if (ignoreList.length === 0) {
+                chatClient.say(channel, `@${user} Global ignore list is empty.`);
+              } else {
+                // Split into chunks if there are too many names to fit in one message
+                const maxNamesPerMessage = 10;
+                for (let i = 0; i < ignoreList.length; i += maxNamesPerMessage) {
+                  const chunk = ignoreList.slice(i, i + maxNamesPerMessage).join(', ');
+                  chatClient.say(channel, `@${user} Global ignore list (${i+1}-${Math.min(i+maxNamesPerMessage, ignoreList.length)}/${ignoreList.length}): ${chunk}`);
+                }
+              }
+              break;
+              
+            default:
+              chatClient.say(channel, `@${user} Unknown action: ${action}. Use add, remove, or list.`);
+          }
+          
+          return;
+        }
         
         // Check if the command is moderator-only and user is not a mod
         if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
@@ -722,7 +859,16 @@ function setupMessageHandler(chatClient) {
             break;
             
           case 'help':
-            chatClient.say(channel, `@${user} Available commands: ${prefix}translate, ${prefix}config, ${prefix}exclude, ${prefix}include, ${prefix}help`);
+            // Update help command to include the new command for global ignore
+            const helpCommands = [`${prefix}translate`, `${prefix}config`, `${prefix}exclude`, `${prefix}include`];
+            
+            if (BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user === channelName) {
+              helpCommands.push(`${prefix}globalignore`);
+            }
+            
+            helpCommands.push(`${prefix}help`);
+            
+            chatClient.say(channel, `@${user} Available commands: ${helpCommands.join(', ')}`);
             break;
             
           case 'refreshtoken':
@@ -750,9 +896,9 @@ function setupMessageHandler(chatClient) {
         return;
       }
       
-      // Check if user is excluded from translations
-      if (channelConfig.excludedUsers.includes(user.toLowerCase())) {
-        debug(`Skipping excluded user: ${user}`);
+      // Check if user is excluded from translations (either in channel-specific list or global ignore list)
+      if (channelConfig.excludedUsers.includes(user.toLowerCase()) || globalIgnoreManager.isIgnored(user)) {
+        debug(`Skipping excluded/ignored user: ${user}`);
         return;
       }
       
