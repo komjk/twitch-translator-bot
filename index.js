@@ -325,30 +325,21 @@ async function main() {
       process.exit(1);
     }
 
-    // Set up authentication with simpler approach
-    const authProvider = new RefreshingAuthProvider({
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      scopes: ['chat:read', 'chat:edit'],
-      onRefresh: async (newTokenData) => {
-        console.log('Refreshed access token');
-      }
-    });
-
-    await authProvider.addUser(BOT_USERNAME, {
+    // ==========================================
+    // Create the auth provider with bare minimum
+    // ==========================================
+    const tokenData = {
       accessToken: ACCESS_TOKEN,
       refreshToken: REFRESH_TOKEN,
-      // Let the library handle token expiration
-      obtainmentTimestamp: Date.now()
-    });
+      expiresIn: 0,
+      obtainmentTimestamp: 0
+    };
 
-    // Create API client
-    const apiClient = new ApiClient({ authProvider });
-    
-    // Initialize channel configurations
-    await channelConfigs.init(apiClient);
+    // Create a simple StaticAuthProvider first to avoid the intent issue
+    const { StaticAuthProvider } = require('@twurple/auth');
+    const authProvider = new StaticAuthProvider(CLIENT_ID, tokenData.accessToken, ['chat:read', 'chat:edit']);
 
-    // Create chat client with simplified approach
+    // Create a simple chat client
     const chatClient = new ChatClient({ 
       authProvider, 
       channels: CHANNELS,
@@ -356,6 +347,12 @@ async function main() {
         minLevel: DEBUG ? 'debug' : 'info'
       }
     });
+
+    // Create API client
+    const apiClient = new ApiClient({ authProvider });
+    
+    // Initialize channel configurations
+    await channelConfigs.init(apiClient);
 
     // Connect to chat
     await chatClient.connect();
