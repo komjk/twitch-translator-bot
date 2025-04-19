@@ -338,13 +338,16 @@ async function main() {
     // Use a unique userId (can be anything consistent)
     const userId = BOT_USERNAME.toLowerCase();
     
+    // Add the chat intent explicitly
     await authProvider.addUserForToken({
       accessToken: ACCESS_TOKEN,
       refreshToken: REFRESH_TOKEN,
-      // Don't force immediate refresh - let the library handle token expiration
       expiresIn: null,
       obtainmentTimestamp: Date.now()
     }, ['chat:read', 'chat:edit']);
+
+    // Register the 'chat' intent
+    authProvider.addIntentToUser(userId, 'chat');
 
     // Create API client
     const apiClient = new ApiClient({ authProvider });
@@ -352,13 +355,15 @@ async function main() {
     // Initialize channel configurations
     await channelConfigs.init(apiClient);
 
-    // Create chat client
+    // Create chat client with explicit user ID
     const chatClient = new ChatClient({ 
       authProvider, 
       channels: CHANNELS,
       logger: {
         minLevel: DEBUG ? 'debug' : 'info'
-      } 
+      },
+      // Specify the user ID to use for authentication
+      authorizationId: userId
     });
 
     // Connect to chat
