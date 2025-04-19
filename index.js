@@ -10,7 +10,8 @@ const { translate } = require('google-translate-api-x');
 const langdetect = require('langdetect');
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios').default;
+const https = require('https');
+const querystring = require('querystring');
 
 // Configuration
 const BOT_USERNAME = process.env.TWITCH_USERNAME;
@@ -27,7 +28,8 @@ const CACHE_TTL = parseInt(process.env.CACHE_TTL || '3600000', 10); // 1 hour in
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST_URL = process.env.HOST_URL;
 const TOKEN_FILE = path.join(CONFIG_DIR, 'token.json');
-const TOKEN_REFRESH_INTERVAL = 1 * 60 * 60 * 1000; // 1 hour in milliseconds
+const TOKEN_REFRESH_INTERVAL = 60 * 60 * 1000; // Check token every hour
+const REFRESH_BEFORE_EXPIRY = 15 * 60 * 1000; // Refresh 15 minutes before expiry
 
 // Rate limiting configuration
 const RATE_LIMIT = {
@@ -44,22 +46,43 @@ const rateLimiters = {
   channels: {},
 };
 
-// Token management object
+// Token management
 const tokenManager = {
   accessToken: ACCESS_TOKEN,
   refreshToken: REFRESH_TOKEN,
-  expiryTimestamp: null,
+  expiryTimestamp: null, // When the token expires
+
+  // Initialize with existing token or from environment
+  init() {
+    // Try to load from token file first
+    if (this.loadTokens()) {
+      debug('Loaded tokens from file');
+    } else {
+      // Otherwise use the ones from environment
+      this.accessToken = ACCESS_TOKEN;
+      this.refreshToken = REFRESH_TOKEN;
+      
+      // Set default expiry if not known (4 hours from now)
+      if (!this.expiryTimestamp) {
+        this.expiryTimestamp = Date.now() + (4 * 60 * 60 * 1000);
+        this.saveTokens();
+      }
+      
+      debug('Using tokens from environment variables');
+    }
+    
+    return !!this.accessToken && !!this.refreshToken;
+  },
   
-  // Load saved tokens from file
+  // Load tokens from file
   loadTokens() {
     try {
       if (fs.existsSync(TOKEN_FILE)) {
-        const tokenData = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-        if (tokenData.accessToken && tokenData.refreshToken) {
-          this.accessToken = tokenData.accessToken;
-          this.refreshToken = tokenData.refreshToken;
-          this.expiryTimestamp = tokenData.expiryTimestamp || null;
-          debug('Loaded tokens from file');
+        const data = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+        if (data.accessToken && data.refreshToken) {
+          this.accessToken = data.accessToken;
+          this.refreshToken = data.refreshToken;
+          this.expiryTimestamp = data.expiryTimestamp || null;
           return true;
         }
       }
@@ -87,57 +110,90 @@ const tokenManager = {
     }
   },
   
-  // Refresh the token using Twitch API
-  async refreshToken(clientId, clientSecret) {
-    debug('Refreshing access token...');
+  // Check if token needs refresh soon
+  needsRefresh() {
+    if (!this.expiryTimestamp) return true;
     
-    try {
-      const response = await axios.post('https://id.twitch.tv/oauth2/token', null, {
-        params: {
-          grant_type: 'refresh_token',
-          refresh_token: encodeURIComponent(this.refreshToken),
-          client_id: clientId,
-          client_secret: clientSecret
-        },
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      });
-      
-      if (response.data && response.data.access_token) {
-        // Update tokens
-        this.accessToken = response.data.access_token;
-        
-        // Some implementations might return a new refresh token
-        if (response.data.refresh_token) {
-          this.refreshToken = response.data.refresh_token;
-        }
-        
-        // Calculate expiry time (with 10 minute safety margin)
-        const expiresIn = response.data.expires_in || 14400; // Default to 4 hours if not specified
-        this.expiryTimestamp = Date.now() + (expiresIn * 1000) - (10 * 60 * 1000);
-        
-        // Save the updated tokens
-        this.saveTokens();
-        
-        debug('Token refreshed successfully');
-        return this.accessToken;
-      } else {
-        throw new Error('Invalid response from Twitch OAuth API');
-      }
-    } catch (error) {
-      console.error('Error refreshing token:', error.message);
-      if (error.response) {
-        console.error('Response data:', error.response.data);
-      }
-      throw error;
-    }
+    // Refresh if we're within the refresh window
+    return Date.now() + REFRESH_BEFORE_EXPIRY >= this.expiryTimestamp;
   },
   
-  // Check if token needs refresh
-  needsRefresh() {
-    // If we don't have an expiry timestamp or it's in the past, we need to refresh
-    return !this.expiryTimestamp || Date.now() >= this.expiryTimestamp;
+  // Refresh the token using Twitch API directly
+  refreshToken() {
+    return new Promise((resolve, reject) => {
+      if (!CLIENT_ID || !CLIENT_SECRET || !this.refreshToken) {
+        return reject(new Error('Missing required credentials for token refresh'));
+      }
+      
+      debug('Refreshing access token...');
+      
+      const postData = querystring.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: this.refreshToken,
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET
+      });
+      
+      const options = {
+        hostname: 'id.twitch.tv',
+        port: 443,
+        path: '/oauth2/token',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': postData.length
+        }
+      };
+      
+      const req = https.request(options, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try {
+              const response = JSON.parse(data);
+              
+              if (!response.access_token) {
+                return reject(new Error('Invalid response from Twitch: missing access token'));
+              }
+              
+              // Update tokens
+              this.accessToken = response.access_token;
+              
+              // Some implementations might return a new refresh token
+              if (response.refresh_token) {
+                this.refreshToken = response.refresh_token;
+              }
+              
+              // Calculate expiry time (with 10 minute safety margin)
+              const expiresIn = response.expires_in || 14400; // Default to 4 hours if not specified
+              this.expiryTimestamp = Date.now() + (expiresIn * 1000);
+              
+              // Save the updated tokens
+              this.saveTokens();
+              
+              debug('Token refreshed successfully');
+              resolve(this.accessToken);
+            } catch (error) {
+              reject(new Error(`Failed to parse Twitch response: ${error.message}`));
+            }
+          } else {
+            reject(new Error(`HTTP Error ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+      
+      req.on('error', (error) => {
+        reject(new Error(`Error refreshing token: ${error.message}`));
+      });
+      
+      req.write(postData);
+      req.end();
+    });
   }
 };
 
@@ -393,6 +449,18 @@ const isInappropriateMessage = (message) => {
   return inappropriatePatterns.some(pattern => pattern.test(message));
 };
 
+// Create a new chat client with the current token
+function createChatClient(token) {
+  const authProvider = new StaticAuthProvider(CLIENT_ID, token);
+  return new ChatClient({
+    authProvider,
+    channels: CHANNELS,
+    logger: {
+      minLevel: DEBUG ? 'debug' : 'info'
+    }
+  });
+}
+
 // Main async function
 async function main() {
   try {
@@ -402,22 +470,29 @@ async function main() {
       process.exit(1);
     }
 
-    if (!ACCESS_TOKEN) {
-      console.error('Error: Missing TWITCH_ACCESS_TOKEN in .env file');
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+      console.error('Error: Missing TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET in .env file');
       process.exit(1);
     }
 
-    // Create auth provider with current token - IMPORTANT: we directly use the user's token without validation
-    const authProvider = new StaticAuthProvider(CLIENT_ID, ACCESS_TOKEN);
+    // Initialize token manager
+    if (!tokenManager.init()) {
+      console.error('Error: Missing tokens. Make sure TWITCH_ACCESS_TOKEN and TWITCH_REFRESH_TOKEN are set in .env file');
+      process.exit(1);
+    }
 
-    // Create a simple chat client for Twitch chat connection
-    const chatClient = new ChatClient({ 
-      authProvider, 
-      channels: CHANNELS,
-      logger: {
-        minLevel: DEBUG ? 'debug' : 'info'
+    // Try to refresh token if needed
+    if (tokenManager.needsRefresh()) {
+      try {
+        debug('Token needs refresh at startup');
+        await tokenManager.refreshToken();
+      } catch (error) {
+        console.error('Failed to refresh token at startup. Will continue with current token:', error.message);
       }
-    });
+    }
+
+    // Create chat client
+    let chatClient = createChatClient(tokenManager.accessToken);
 
     // Initialize channel configurations
     await channelConfigs.init();
@@ -435,263 +510,41 @@ async function main() {
       }
     }
 
+    // Set up periodic token refresh
+    const tokenRefreshInterval = setInterval(async () => {
+      if (tokenManager.needsRefresh()) {
+        try {
+          debug('Performing scheduled token refresh');
+          await tokenManager.refreshToken();
+          
+          // Recreate chat client with new token
+          debug('Disconnecting old chat client for token update');
+          await chatClient.quit();
+          
+          // Create new chat client with fresh token
+          chatClient = createChatClient(tokenManager.accessToken);
+          
+          // Reconnect
+          debug('Reconnecting chat client with new token');
+          await chatClient.connect();
+          console.log('Reconnected to Twitch Chat with refreshed token');
+          
+          // Reattach message handler
+          setupMessageHandler(chatClient);
+          
+        } catch (error) {
+          console.error('Failed to refresh token:', error.message);
+        }
+      }
+    }, TOKEN_REFRESH_INTERVAL);
+
     // Set up periodic cache cleaning
     setInterval(() => {
       translationCache.cleanExpired();
     }, 60 * 60 * 1000); // Clean cache every hour
 
-    // Process messages
-    chatClient.onMessage(async (channel, user, message, msg) => {
-      try {
-        const channelName = channel.replace('#', '');
-        const channelConfig = channelConfigs.getConfig(channelName);
-        const prefix = channelConfig.prefix || '!';
-        
-        // Check if this is a command
-        if (message.startsWith(prefix)) {
-          // Check if commands are enabled
-          if (!channelConfig.respondToCommands) return;
-          
-          // Check if the command is moderator-only and user is not a mod
-          if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
-            return;
-          }
-          
-          // Parse command and arguments
-          const args = message.slice(prefix.length).trim().split(/\s+/);
-          const command = args.shift().toLowerCase();
-          
-          switch (command) {
-            case 'translate':
-              // Format: !translate [language] text
-              if (args.length < 2) {
-                chatClient.say(channel, `@${user} Usage: ${prefix}translate [language] [text]`);
-                return;
-              }
-              
-              const sourceLang = args.shift().toLowerCase();
-              const textToTranslate = args.join(' ');
-              
-              if (textToTranslate.length < 2) {
-                chatClient.say(channel, `@${user} Text too short to translate.`);
-                return;
-              }
-              
-              try {
-                // Check if we have this translation cached
-                const cachedTranslation = translationCache.get(textToTranslate, sourceLang, 'en');
-                if (cachedTranslation) {
-                  chatClient.say(channel, `@${user} [${sourceLang}→en]: ${cachedTranslation}`);
-                  return;
-                }
-                
-                // Translate the text
-                const result = await translate(textToTranslate, { from: sourceLang, to: 'en' });
-                translationCache.add(textToTranslate, sourceLang, 'en', result.text);
-                
-                chatClient.say(channel, `@${user} [${sourceLang}→en]: ${result.text}`);
-              } catch (error) {
-                chatClient.say(channel, `@${user} Error translating: ${error.message}`);
-              }
-              break;
-              
-            case 'config':
-              // Only allow channel owner/mods to change config
-              if (!msg.userInfo.isMod && user !== channelName) {
-                return;
-              }
-              
-              if (args.length < 1) {
-                chatClient.say(channel, `@${user} Available settings: autoTranslate, respondToCommands, prefix, moderatorOnly`);
-                return;
-              }
-              
-              const setting = args[0].toLowerCase();
-              const value = args[1] ? args[1].toLowerCase() : null;
-              
-              if (value === null) {
-                // Show current value
-                chatClient.say(channel, `@${user} ${setting} = ${channelConfig[setting]}`);
-                return;
-              }
-              
-              // Update setting
-              switch (setting) {
-                case 'autotranslate':
-                  channelConfig.autoTranslate = value === 'true' || value === 'on';
-                  break;
-                case 'respondtocommands':
-                  channelConfig.respondToCommands = value === 'true' || value === 'on';
-                  break;
-                case 'prefix':
-                  channelConfig.prefix = value;
-                  break;
-                case 'moderatoronly':
-                  channelConfig.moderatorOnly = value === 'true' || value === 'on';
-                  break;
-                default:
-                  chatClient.say(channel, `@${user} Unknown setting: ${setting}`);
-                  return;
-              }
-              
-              // Save updated config
-              channelConfigs.updateConfig(channelName, channelConfig);
-              chatClient.say(channel, `@${user} Updated: ${setting} = ${channelConfig[setting]}`);
-              break;
-              
-            case 'exclude':
-              // Only allow channel owner/mods
-              if (!msg.userInfo.isMod && user !== channelName) {
-                return;
-              }
-              
-              if (args.length < 1) {
-                chatClient.say(channel, `@${user} Usage: ${prefix}exclude [username]`);
-                return;
-              }
-              
-              const userToExclude = args[0].toLowerCase();
-              
-              // Add to excluded users if not already there
-              if (!channelConfig.excludedUsers.includes(userToExclude)) {
-                channelConfig.excludedUsers.push(userToExclude);
-                channelConfigs.updateConfig(channelName, channelConfig);
-                chatClient.say(channel, `@${user} Added ${userToExclude} to excluded users.`);
-              } else {
-                chatClient.say(channel, `@${user} ${userToExclude} is already excluded.`);
-              }
-              break;
-              
-            case 'include':
-              // Only allow channel owner/mods
-              if (!msg.userInfo.isMod && user !== channelName) {
-                return;
-              }
-              
-              if (args.length < 1) {
-                chatClient.say(channel, `@${user} Usage: ${prefix}include [username]`);
-                return;
-              }
-              
-              const userToInclude = args[0].toLowerCase();
-              
-              // Remove from excluded users if present
-              const index = channelConfig.excludedUsers.indexOf(userToInclude);
-              if (index !== -1) {
-                channelConfig.excludedUsers.splice(index, 1);
-                channelConfigs.updateConfig(channelName, channelConfig);
-                chatClient.say(channel, `@${user} Removed ${userToInclude} from excluded users.`);
-              } else {
-                chatClient.say(channel, `@${user} ${userToInclude} is not excluded.`);
-              }
-              break;
-              
-            case 'help':
-              chatClient.say(channel, `@${user} Available commands: ${prefix}translate, ${prefix}config, ${prefix}exclude, ${prefix}include, ${prefix}help`);
-              break;
-          }
-          
-          return;
-        }
-        
-        // Check if auto-translate is disabled for this channel
-        if (!channelConfig.autoTranslate) {
-          return;
-        }
-        
-        // Check if user is excluded from translations
-        if (channelConfig.excludedUsers.includes(user.toLowerCase())) {
-          debug(`Skipping excluded user: ${user}`);
-          return;
-        }
-        
-        // Skip if message is too short
-        if (!message || message.length < 5) return;
-        
-        // Sanitize the input (remove potentially harmful content)
-        const sanitizedMessage = sanitizeText(message);
-        
-        // Skip inappropriate messages
-        if (isInappropriateMessage(sanitizedMessage)) {
-          debug('Skipping potentially inappropriate message');
-          return;
-        }
-        
-        // Apply rate limiting
-        if (!shouldTranslate(channelName)) {
-          return;
-        }
-        
-        // Try to detect the language
-        const detection = langdetect.detect(sanitizedMessage);
-        
-        // If no detection results, ignore
-        if (!detection || detection.length === 0) {
-          return;
-        }
-        
-        // Get the detected language
-        const detectedLang = detection[0].lang;
-        const confidence = detection[0].prob;
-        debug(`Detected language: ${detectedLang} (confidence: ${confidence.toFixed(2)})`);
-        
-        // Skip if confidence is too low or if it's already English
-        if (confidence < 0.5 || detectedLang === 'en') {
-          return;
-        }
-        
-        // Check if channel has language filter and this language isn't in it
-        if (channelConfig.languageFilter.length > 0 && 
-            !channelConfig.languageFilter.includes(detectedLang)) {
-          debug(`Skipping filtered language: ${detectedLang}`);
-          return;
-        }
-        
-        debug(`Translating message from ${channel}: ${sanitizedMessage}`);
-        
-        // Check if we have a cached translation
-        let translatedText = translationCache.get(sanitizedMessage, detectedLang, 'en');
-        
-        // If not in cache, call translation API
-        if (!translatedText) {
-          try {
-            // Translate to English with timeout to prevent hanging
-            const translationPromise = translate(sanitizedMessage, { to: 'en' });
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Translation timed out')), 5000)
-            );
-            
-            const result = await Promise.race([translationPromise, timeoutPromise]);
-            translatedText = sanitizeText(result.text);
-            
-            // Store in cache
-            translationCache.add(sanitizedMessage, detectedLang, 'en', translatedText);
-          } catch (error) {
-            console.error('Translation error:', error);
-            return;
-          }
-        }
-        
-        // Skip if translation failed or is empty
-        if (!translatedText) {
-          debug('Empty translation result, skipping');
-          return;
-        }
-        
-        // Format the response
-        // Add username and original language
-        const response = `[${user}, ${detectedLang}→en]: ${translatedText}`;
-        
-        // Send the translated message to the channel
-        chatClient.say(channel, response)
-          .catch(error => {
-            console.error(`Error sending message to ${channel}:`, error);
-          });
-        debug(`Translation sent to ${channel}: ${response}`);
-      } catch (error) {
-        console.error('Error processing message:', error);
-      }
-    });
+    // Set up message handler
+    setupMessageHandler(chatClient);
 
     // Set up EventSub listener if HOST_URL is provided
     if (HOST_URL && CLIENT_ID && CLIENT_SECRET) {
@@ -702,6 +555,8 @@ async function main() {
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
       console.log('Bot is shutting down...');
+      clearInterval(tokenRefreshInterval);
+      
       for (const channelName of CHANNELS) {
         try {
           await chatClient.say(channelName, 'Translation bot is shutting down. Goodbye!');
@@ -717,6 +572,277 @@ async function main() {
     console.error('Error starting bot:', error);
     process.exit(1);
   }
+}
+
+// Process messages function
+function setupMessageHandler(chatClient) {
+  chatClient.onMessage(async (channel, user, message, msg) => {
+    try {
+      const channelName = channel.replace('#', '');
+      const channelConfig = channelConfigs.getConfig(channelName);
+      const prefix = channelConfig.prefix || '!';
+      
+      // Check if this is a command
+      if (message.startsWith(prefix)) {
+        // Check if commands are enabled
+        if (!channelConfig.respondToCommands) return;
+        
+        // Check if the command is moderator-only and user is not a mod
+        if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
+          return;
+        }
+        
+        // Parse command and arguments
+        const args = message.slice(prefix.length).trim().split(/\s+/);
+        const command = args.shift().toLowerCase();
+        
+        switch (command) {
+          case 'translate':
+            // Format: !translate [language] text
+            if (args.length < 2) {
+              chatClient.say(channel, `@${user} Usage: ${prefix}translate [language] [text]`);
+              return;
+            }
+            
+            const sourceLang = args.shift().toLowerCase();
+            const textToTranslate = args.join(' ');
+            
+            if (textToTranslate.length < 2) {
+              chatClient.say(channel, `@${user} Text too short to translate.`);
+              return;
+            }
+            
+            try {
+              // Check if we have this translation cached
+              const cachedTranslation = translationCache.get(textToTranslate, sourceLang, 'en');
+              if (cachedTranslation) {
+                chatClient.say(channel, `@${user} [${sourceLang}→en]: ${cachedTranslation}`);
+                return;
+              }
+              
+              // Translate the text
+              const result = await translate(textToTranslate, { from: sourceLang, to: 'en' });
+              translationCache.add(textToTranslate, sourceLang, 'en', result.text);
+              
+              chatClient.say(channel, `@${user} [${sourceLang}→en]: ${result.text}`);
+            } catch (error) {
+              chatClient.say(channel, `@${user} Error translating: ${error.message}`);
+            }
+            break;
+            
+          case 'config':
+            // Only allow channel owner/mods to change config
+            if (!msg.userInfo.isMod && user !== channelName) {
+              return;
+            }
+            
+            if (args.length < 1) {
+              chatClient.say(channel, `@${user} Available settings: autoTranslate, respondToCommands, prefix, moderatorOnly`);
+              return;
+            }
+            
+            const setting = args[0].toLowerCase();
+            const value = args[1] ? args[1].toLowerCase() : null;
+            
+            if (value === null) {
+              // Show current value
+              chatClient.say(channel, `@${user} ${setting} = ${channelConfig[setting]}`);
+              return;
+            }
+            
+            // Update setting
+            switch (setting) {
+              case 'autotranslate':
+                channelConfig.autoTranslate = value === 'true' || value === 'on';
+                break;
+              case 'respondtocommands':
+                channelConfig.respondToCommands = value === 'true' || value === 'on';
+                break;
+              case 'prefix':
+                channelConfig.prefix = value;
+                break;
+              case 'moderatoronly':
+                channelConfig.moderatorOnly = value === 'true' || value === 'on';
+                break;
+              default:
+                chatClient.say(channel, `@${user} Unknown setting: ${setting}`);
+                return;
+            }
+            
+            // Save updated config
+            channelConfigs.updateConfig(channelName, channelConfig);
+            chatClient.say(channel, `@${user} Updated: ${setting} = ${channelConfig[setting]}`);
+            break;
+            
+          case 'exclude':
+            // Only allow channel owner/mods
+            if (!msg.userInfo.isMod && user !== channelName) {
+              return;
+            }
+            
+            if (args.length < 1) {
+              chatClient.say(channel, `@${user} Usage: ${prefix}exclude [username]`);
+              return;
+            }
+            
+            const userToExclude = args[0].toLowerCase();
+            
+            // Add to excluded users if not already there
+            if (!channelConfig.excludedUsers.includes(userToExclude)) {
+              channelConfig.excludedUsers.push(userToExclude);
+              channelConfigs.updateConfig(channelName, channelConfig);
+              chatClient.say(channel, `@${user} Added ${userToExclude} to excluded users.`);
+            } else {
+              chatClient.say(channel, `@${user} ${userToExclude} is already excluded.`);
+            }
+            break;
+            
+          case 'include':
+            // Only allow channel owner/mods
+            if (!msg.userInfo.isMod && user !== channelName) {
+              return;
+            }
+            
+            if (args.length < 1) {
+              chatClient.say(channel, `@${user} Usage: ${prefix}include [username]`);
+              return;
+            }
+            
+            const userToInclude = args[0].toLowerCase();
+            
+            // Remove from excluded users if present
+            const index = channelConfig.excludedUsers.indexOf(userToInclude);
+            if (index !== -1) {
+              channelConfig.excludedUsers.splice(index, 1);
+              channelConfigs.updateConfig(channelName, channelConfig);
+              chatClient.say(channel, `@${user} Removed ${userToInclude} from excluded users.`);
+            } else {
+              chatClient.say(channel, `@${user} ${userToInclude} is not excluded.`);
+            }
+            break;
+            
+          case 'help':
+            chatClient.say(channel, `@${user} Available commands: ${prefix}translate, ${prefix}config, ${prefix}exclude, ${prefix}include, ${prefix}help`);
+            break;
+            
+          case 'refreshtoken':
+            // Only allow channel owner to manually refresh token
+            if (user !== channelName) {
+              return;
+            }
+            
+            chatClient.say(channel, `@${user} Manually refreshing token...`);
+            
+            try {
+              await tokenManager.refreshToken();
+              chatClient.say(channel, `@${user} Token successfully refreshed!`);
+            } catch (error) {
+              chatClient.say(channel, `@${user} Error refreshing token: ${error.message}`);
+            }
+            break;
+        }
+        
+        return;
+      }
+      
+      // Check if auto-translate is disabled for this channel
+      if (!channelConfig.autoTranslate) {
+        return;
+      }
+      
+      // Check if user is excluded from translations
+      if (channelConfig.excludedUsers.includes(user.toLowerCase())) {
+        debug(`Skipping excluded user: ${user}`);
+        return;
+      }
+      
+      // Skip if message is too short
+      if (!message || message.length < 5) return;
+      
+      // Sanitize the input (remove potentially harmful content)
+      const sanitizedMessage = sanitizeText(message);
+      
+      // Skip inappropriate messages
+      if (isInappropriateMessage(sanitizedMessage)) {
+        debug('Skipping potentially inappropriate message');
+        return;
+      }
+      
+      // Apply rate limiting
+      if (!shouldTranslate(channelName)) {
+        return;
+      }
+      
+      // Try to detect the language
+      const detection = langdetect.detect(sanitizedMessage);
+      
+      // If no detection results, ignore
+      if (!detection || detection.length === 0) {
+        return;
+      }
+      
+      // Get the detected language
+      const detectedLang = detection[0].lang;
+      const confidence = detection[0].prob;
+      debug(`Detected language: ${detectedLang} (confidence: ${confidence.toFixed(2)})`);
+      
+      // Skip if confidence is too low or if it's already English
+      if (confidence < 0.5 || detectedLang === 'en') {
+        return;
+      }
+      
+      // Check if channel has language filter and this language isn't in it
+      if (channelConfig.languageFilter.length > 0 && 
+          !channelConfig.languageFilter.includes(detectedLang)) {
+        debug(`Skipping filtered language: ${detectedLang}`);
+        return;
+      }
+      
+      debug(`Translating message from ${channel}: ${sanitizedMessage}`);
+      
+      // Check if we have a cached translation
+      let translatedText = translationCache.get(sanitizedMessage, detectedLang, 'en');
+      
+      // If not in cache, call translation API
+      if (!translatedText) {
+        try {
+          // Translate to English with timeout to prevent hanging
+          const translationPromise = translate(sanitizedMessage, { to: 'en' });
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Translation timed out')), 5000)
+          );
+          
+          const result = await Promise.race([translationPromise, timeoutPromise]);
+          translatedText = sanitizeText(result.text);
+          
+          // Store in cache
+          translationCache.add(sanitizedMessage, detectedLang, 'en', translatedText);
+        } catch (error) {
+          console.error('Translation error:', error);
+          return;
+        }
+      }
+      
+      // Skip if translation failed or is empty
+      if (!translatedText) {
+        debug('Empty translation result, skipping');
+        return;
+      }
+      
+      // Format the response
+      // Add username and original language
+      const response = `[${user}, ${detectedLang}→en]: ${translatedText}`;
+      
+      // Send the translated message to the channel
+      chatClient.say(channel, response)
+        .catch(error => {
+          console.error(`Error sending message to ${channel}:`, error);
+        });
+      debug(`Translation sent to ${channel}: ${response}`);
+    } catch (error) {
+      console.error('Error processing message:', error);
+    }
+  });
 }
 
 // Start the bot
