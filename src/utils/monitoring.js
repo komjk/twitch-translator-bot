@@ -1,4 +1,4 @@
-const { debug } = require('./utils');
+const { debug } = require('./index');
 
 class Monitoring {
   constructor() {
@@ -133,4 +133,4 @@ class Monitoring {
   }
 }
 
-module.exports = new Monitoring(); 
+module.exports = new Monitoring();
