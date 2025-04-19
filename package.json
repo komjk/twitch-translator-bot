@@ -2,9 +2,9 @@
   "name": "twitch-translator-bot",
   "version": "1.0.0",
   "description": "A Twitch bot that translates non-English messages to English",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node src/index.js"
   },
   "keywords": [
     "twitch",
