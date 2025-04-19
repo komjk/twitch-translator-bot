@@ -27,6 +27,8 @@ Copy the `Example.env` file to `.env` and set:
 - `RATE_LIMIT_TRANSLATIONS`: Maximum translations per channel per minute (default: 10)
 - `CACHE_SIZE`: Number of translations to keep in memory cache (default: 100)
 - `CACHE_TTL`: Time in milliseconds to keep translations in cache (default: 3600000 = 1 hour)
+- `MAX_MESSAGE_LENGTH`: Maximum length of messages to process (default: 500 characters)
+- `MIN_CONFIDENCE`: Minimum confidence level for language detection (default: 0.5)
 - `CONFIG_DIR`: Directory to store channel-specific configurations (default: ./channel_configs)
 - `DEBUG`: Set to 'true' to enable detailed logging
 
@@ -69,11 +71,13 @@ Mods can configure the bot per channel using the `!config` command:
 - Moderator controls
 - Configurable via environment variables
 - Debug mode for troubleshooting
+- Message length limits
+- Configurable language detection confidence
 
 ## Technical Details
 
 This bot uses:
-- Twurple libraries (@twurple/api, @twurple/auth, @twurple/chat) for Twitch API integration
+- Twurple libraries (@twurple/auth, @twurple/chat) for Twitch API integration
 - Google Translate API for translations
 - Language detection for automatic language identification
 
@@ -84,6 +88,8 @@ This bot uses:
 - Message filtering to prevent inappropriate content
 - Translation timeout protection
 - Error handling and graceful recovery
+- Message length limits
+- Configurable language detection confidence
 
 ## Twitch TOS Compliance
 

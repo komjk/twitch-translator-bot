@@ -2,7 +2,6 @@
 require('dotenv').config();
 
 // Import dependencies
-const { ApiClient } = require('@twurple/api');
 const { ChatClient } = require('@twurple/chat');
 const { StaticAuthProvider } = require('@twurple/auth');
 const { translate } = require('google-translate-api-x');
@@ -24,6 +23,8 @@ const DEBUG = process.env.DEBUG === 'true';
 const CONFIG_DIR = process.env.CONFIG_DIR || './channel_configs';
 const CACHE_SIZE = parseInt(process.env.CACHE_SIZE || '100', 10);
 const CACHE_TTL = parseInt(process.env.CACHE_TTL || '3600000', 10); // 1 hour in ms
+const MAX_MESSAGE_LENGTH = parseInt(process.env.MAX_MESSAGE_LENGTH || '500', 10);
+const MIN_CONFIDENCE = parseFloat(process.env.MIN_CONFIDENCE || '0.5');
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST_URL = process.env.HOST_URL;
 const TOKEN_FILE = path.join(CONFIG_DIR, 'token.json');
@@ -683,6 +684,11 @@ async function main() {
   }
 }
 
+// Check if message is too long
+const isMessageTooLong = (message) => {
+  return message && message.length > MAX_MESSAGE_LENGTH;
+};
+
 // Process messages function
 function setupMessageHandler(chatClient) {
   chatClient.onMessage(async (channel, user, message, msg) => {
@@ -690,6 +696,12 @@ function setupMessageHandler(chatClient) {
       const channelName = channel.replace('#', '').toLowerCase();
       const channelConfig = channelConfigs.getConfig(channelName);
       const prefix = channelConfig.prefix || '!';
+      
+      // Check if message is too long
+      if (isMessageTooLong(message)) {
+        debug(`Skipping long message from ${user} in ${channel}`);
+        return;
+      }
       
       // Check if this is a command
       if (message.startsWith(prefix)) {
@@ -975,7 +987,7 @@ function setupMessageHandler(chatClient) {
       debug(`Detected language: ${detectedLang} (confidence: ${confidence.toFixed(2)})`);
       
       // Skip if confidence is too low or if it's already English
-      if (confidence < 0.5 || detectedLang === 'en') {
+      if (confidence < MIN_CONFIDENCE || detectedLang === 'en') {
         return;
       }
       
