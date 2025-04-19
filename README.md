@@ -31,6 +31,28 @@ Copy the `Example.env` file to `.env` and set:
 - `MIN_CONFIDENCE`: Minimum confidence level for language detection (default: 0.5)
 - `CONFIG_DIR`: Directory to store channel-specific configurations (default: ./channel_configs)
 - `DEBUG`: Set to 'true' to enable detailed logging
+- `PORT`: Port for the monitoring API (default: 8080)
+- `HOST_URL`: Base URL for the monitoring API (optional)
+
+## Project Structure
+
+```
+src/
+├── handlers/
+│   ├── commands.js      # Command handling logic
+│   └── messageHandler.js # Message processing and translation
+├── managers/
+│   ├── channelConfigs.js # Channel-specific settings
+│   ├── globalIgnoreManager.js # Global user ignore list
+│   ├── rateLimiter.js   # Rate limiting implementation
+│   ├── tokenManager.js  # Token management and refresh
+│   └── translationCache.js # Translation caching
+├── utils/
+│   ├── monitoring.js    # Performance monitoring
+│   └── utils.js         # Utility functions
+├── config.js           # Configuration loading
+└── index.js           # Main application entry point
+```
 
 ## Usage
 
@@ -47,6 +69,8 @@ The bot responds to the following commands:
 - `!exclude [username]` - Exclude a user from automatic translations (mods only)
 - `!include [username]` - Remove a user from the excluded list (mods only)
 - `!help` - Show available commands
+- `!refreshtoken` - Manually refresh the bot's token (channel owner only)
+- `!globalignore [add/remove/list] [username]` - Manage global ignore list (bot owner only)
 
 ### Channel Configuration
 
@@ -73,6 +97,12 @@ Mods can configure the bot per channel using the `!config` command:
 - Debug mode for troubleshooting
 - Message length limits
 - Configurable language detection confidence
+- Performance monitoring and metrics
+- Global user ignore list
+- Emote preservation in translations
+- Language filtering per channel
+- Automatic cache cleanup
+- Graceful shutdown handling
 
 ## Technical Details
 
@@ -80,6 +110,11 @@ This bot uses:
 - Twurple libraries (@twurple/auth, @twurple/chat) for Twitch API integration
 - Google Translate API for translations
 - Language detection for automatic language identification
+- Modular architecture for better maintainability
+- Performance monitoring for metrics tracking
+- LRU caching for efficient memory usage
+- Sliding window rate limiting
+- Token validation and automatic refresh
 
 ## Security Measures
 
@@ -90,6 +125,19 @@ This bot uses:
 - Error handling and graceful recovery
 - Message length limits
 - Configurable language detection confidence
+- Token validation and secure storage
+- Permission-based command access
+- Global and channel-specific user exclusion
+
+## Monitoring
+
+The bot includes a comprehensive monitoring system that tracks:
+- Translation success rates
+- Cache hit rates
+- Message processing statistics
+- Error rates by type
+- Performance metrics
+- Resource usage
 
 ## Twitch TOS Compliance
 
@@ -101,6 +149,8 @@ This bot complies with Twitch's Terms of Service by:
 4. Not interfering with any Twitch functionality
 5. Not scraping or collecting user data
 6. Only operating in channels where authorized
+7. Properly handling user permissions
+8. Implementing appropriate rate limiting
 
 ## Note
 
