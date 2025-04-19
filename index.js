@@ -633,15 +633,6 @@ async function main() {
     await chatClient.connect();
     console.log('Connected to Twitch Chat');
 
-    // Send disclaimer to channels
-    for (const channelName of CHANNELS) {
-      try {
-        chatClient.say(channelName, 'Translation bot is now active. This bot is not affiliated with or endorsed by Twitch.');
-      } catch (error) {
-        console.error(`Error sending disclaimer to ${channelName}:`, error);
-      }
-    }
-
     // Set up periodic token refresh
     const tokenRefreshInterval = setInterval(async () => {
       if (tokenManager.needsRefresh()) {
@@ -682,14 +673,6 @@ async function main() {
     process.on('SIGINT', async () => {
       console.log('Bot is shutting down...');
       clearInterval(tokenRefreshInterval);
-      
-      for (const channelName of CHANNELS) {
-        try {
-          await chatClient.say(channelName, 'Translation bot is shutting down. Goodbye!');
-        } catch (error) {
-          // Ignore errors during shutdown
-        }
-      }
       await chatClient.quit();
       process.exit(0);
     });
