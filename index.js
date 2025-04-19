@@ -363,8 +363,35 @@ const channelConfigs = {
     try {
       if (fs.existsSync(configPath)) {
         const data = fs.readFileSync(configPath, 'utf8');
-        this.configs[normalizedName] = JSON.parse(data);
-        debug(`Loaded config for ${normalizedName} from ${configPath}`);
+        try {
+          this.configs[normalizedName] = JSON.parse(data);
+          debug(`Loaded config for ${normalizedName} from ${configPath}`);
+        } catch (parseError) {
+          console.error(`Error parsing JSON in config for ${normalizedName}: ${parseError.message}`);
+          
+          // Try to make a backup of the corrupted file
+          try {
+            const backupPath = `${configPath}.bak`;
+            fs.writeFileSync(backupPath, data);
+            console.log(`Created backup of corrupted config at ${backupPath}`);
+          } catch (backupError) {
+            console.error(`Failed to create backup: ${backupError.message}`);
+          }
+          
+          // Use defaults for this channel
+          this.configs[normalizedName] = {
+            autoTranslate: true,
+            respondToCommands: true,
+            excludedUsers: [],
+            languageFilter: [],
+            prefix: '!',
+            moderatorOnly: false
+          };
+          
+          // Save the default config to replace the corrupted one
+          this.saveConfig(normalizedName);
+          debug(`Created new default config for ${normalizedName} after JSON parsing error`);
+        }
       } else {
         // Create default config
         this.configs[normalizedName] = {
