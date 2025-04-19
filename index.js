@@ -325,29 +325,22 @@ async function main() {
       process.exit(1);
     }
 
-    // Set up authentication with improved token handling
+    // Set up authentication with simpler approach
     const authProvider = new RefreshingAuthProvider({
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
-      onRefresh: async (userId, newTokenData) => {
-        console.log(`Refreshed tokens for user ${userId}`);
-        // You could save the new tokens here if desired
+      scopes: ['chat:read', 'chat:edit'],
+      onRefresh: async (newTokenData) => {
+        console.log('Refreshed access token');
       }
     });
 
-    // Use a unique userId (can be anything consistent)
-    const userId = BOT_USERNAME.toLowerCase();
-    
-    // Add the chat intent explicitly
-    await authProvider.addUserForToken({
+    await authProvider.addUser(BOT_USERNAME, {
       accessToken: ACCESS_TOKEN,
       refreshToken: REFRESH_TOKEN,
-      expiresIn: null,
+      // Let the library handle token expiration
       obtainmentTimestamp: Date.now()
-    }, ['chat:read', 'chat:edit']);
-
-    // Register the 'chat' intent
-    authProvider.addIntentToUser(userId, 'chat');
+    });
 
     // Create API client
     const apiClient = new ApiClient({ authProvider });
@@ -355,15 +348,13 @@ async function main() {
     // Initialize channel configurations
     await channelConfigs.init(apiClient);
 
-    // Create chat client with explicit user ID
+    // Create chat client with simplified approach
     const chatClient = new ChatClient({ 
       authProvider, 
       channels: CHANNELS,
       logger: {
         minLevel: DEBUG ? 'debug' : 'info'
-      },
-      // Specify the user ID to use for authentication
-      authorizationId: userId
+      }
     });
 
     // Connect to chat
