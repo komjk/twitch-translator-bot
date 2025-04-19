@@ -23,8 +23,6 @@ Copy the `Example.env` file to `.env` and set:
 - `TWITCH_REFRESH_TOKEN`: Your bot's refresh token (from token generator)
 - `TWITCH_BOT_OWNER_ID`: Your Twitch user ID (for admin purposes)
 - `TWITCH_CHANNELS`: Comma-separated list of channels where your bot will operate (e.g., `channel1,channel2,channel3`)
-- `PORT`: Port for EventSub webhook (default: 8080) - only needed if using EventSub features
-- `HOST_URL`: Public URL for EventSub webhooks (e.g., from ngrok) - only needed if using EventSub features
 - `RATE_LIMIT_MESSAGES`: Maximum number of messages processed per minute (default: 20)
 - `RATE_LIMIT_TRANSLATIONS`: Maximum translations per channel per minute (default: 10)
 - `CACHE_SIZE`: Number of translations to keep in memory cache (default: 100)
@@ -76,7 +74,6 @@ Mods can configure the bot per channel using the `!config` command:
 
 This bot uses:
 - Twurple libraries (@twurple/api, @twurple/auth, @twurple/chat) for Twitch API integration
-- EventSub HTTP for webhook subscriptions (optional)
 - Google Translate API for translations
 - Language detection for automatic language identification
 
@@ -101,4 +98,4 @@ This bot complies with Twitch's Terms of Service by:
 
 ## Note
 
-Make sure your bot has proper authorization to read and send messages in the channels. "# Twitch-LangTranslate-Bot" 
+Make sure your bot has proper authorization to read and send messages in the channels.

@@ -17,7 +17,6 @@
     "@twurple/api": "^7.0.6",
     "@twurple/auth": "^7.0.6",
     "@twurple/chat": "^7.0.6",
-    "@twurple/eventsub-http": "^7.0.6",
     "dotenv": "^16.0.3",
     "google-translate-api-x": "^10.5.4",
     "langdetect": "^0.2.1"

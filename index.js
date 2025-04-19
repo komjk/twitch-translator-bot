@@ -5,7 +5,6 @@ require('dotenv').config();
 const { ApiClient } = require('@twurple/api');
 const { ChatClient } = require('@twurple/chat');
 const { StaticAuthProvider } = require('@twurple/auth');
-const { EventSubHttpListener } = require('@twurple/eventsub-http');
 const { translate } = require('google-translate-api-x');
 const langdetect = require('langdetect');
 const fs = require('fs');
@@ -678,12 +677,6 @@ async function main() {
 
     // Set up message handler
     setupMessageHandler(chatClient);
-
-    // Set up EventSub listener if HOST_URL is provided
-    if (HOST_URL && CLIENT_ID && CLIENT_SECRET) {
-      console.log("EventSub integration is currently disabled to ensure chat functionality works properly");
-      // In a full implementation, you would set up EventSub here
-    }
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
