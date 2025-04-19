@@ -357,7 +357,7 @@ const channelConfigs = {
   
   // Load config for a channel by name
   loadConfigByName(channelName) {
-    const normalizedName = channelName.startsWith('#') ? channelName.substring(1) : channelName;
+    const normalizedName = channelName.startsWith('#') ? channelName.substring(1).toLowerCase() : channelName.toLowerCase();
     const configPath = path.join(CONFIG_DIR, `${normalizedName}.json`);
     
     try {
@@ -396,7 +396,7 @@ const channelConfigs = {
   
   // Save config for a specific channel
   saveConfig(channelName) {
-    const normalizedName = channelName.startsWith('#') ? channelName.substring(1) : channelName;
+    const normalizedName = channelName.startsWith('#') ? channelName.substring(1).toLowerCase() : channelName.toLowerCase();
     const configPath = path.join(CONFIG_DIR, `${normalizedName}.json`);
     
     try {
@@ -409,7 +409,7 @@ const channelConfigs = {
   
   // Get config for a specific channel
   getConfig(channelName) {
-    const normalizedName = channelName.startsWith('#') ? channelName.substring(1) : channelName;
+    const normalizedName = channelName.startsWith('#') ? channelName.substring(1).toLowerCase() : channelName.toLowerCase();
     
     // If config doesn't exist, create default
     if (!this.configs[normalizedName]) {
@@ -422,7 +422,7 @@ const channelConfigs = {
   
   // Update config settings for a channel
   updateConfig(channelName, settings) {
-    const normalizedName = channelName.startsWith('#') ? channelName.substring(1) : channelName;
+    const normalizedName = channelName.startsWith('#') ? channelName.substring(1).toLowerCase() : channelName.toLowerCase();
     
     // Update settings
     this.configs[normalizedName] = {
@@ -491,7 +491,7 @@ const processEmotes = (message) => {
 // Check if we should translate (rate limiting)
 const shouldTranslate = (channelName) => {
   const now = Date.now();
-  const normalizedName = channelName.startsWith('#') ? channelName.substring(1) : channelName;
+  const normalizedName = channelName.startsWith('#') ? channelName.substring(1).toLowerCase() : channelName.toLowerCase();
   
   // Reset global rate limiter if needed
   if (now - rateLimiters.global.lastReset > 60000) { // 1 minute
@@ -684,7 +684,7 @@ async function main() {
 function setupMessageHandler(chatClient) {
   chatClient.onMessage(async (channel, user, message, msg) => {
     try {
-      const channelName = channel.replace('#', '');
+      const channelName = channel.replace('#', '').toLowerCase();
       const channelConfig = channelConfigs.getConfig(channelName);
       const prefix = channelConfig.prefix || '!';
       
@@ -698,12 +698,12 @@ function setupMessageHandler(chatClient) {
         const command = args.shift().toLowerCase();
         
         // Check if the command is moderator-only and user is not a mod
-        if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
+        if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user.toLowerCase() !== channelName) {
           return;
         }
         
         // Special global ignore commands that can only be used by the bot owner or channel owner
-        const isOwner = BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user === channelName;
+        const isOwner = BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user.toLowerCase() === channelName;
         
         if ((command === 'globalignore' || command === 'gignore') && isOwner) {
           if (args.length < 1) {
@@ -799,7 +799,7 @@ function setupMessageHandler(chatClient) {
             
           case 'config':
             // Only allow channel owner/mods to change config
-            if (!msg.userInfo.isMod && user !== channelName) {
+            if (!msg.userInfo.isMod && user.toLowerCase() !== channelName) {
               return;
             }
             
@@ -843,7 +843,7 @@ function setupMessageHandler(chatClient) {
             
           case 'exclude':
             // Only allow channel owner/mods
-            if (!msg.userInfo.isMod && user !== channelName) {
+            if (!msg.userInfo.isMod && user.toLowerCase() !== channelName) {
               return;
             }
             
@@ -866,7 +866,7 @@ function setupMessageHandler(chatClient) {
             
           case 'include':
             // Only allow channel owner/mods
-            if (!msg.userInfo.isMod && user !== channelName) {
+            if (!msg.userInfo.isMod && user.toLowerCase() !== channelName) {
               return;
             }
             
@@ -892,7 +892,7 @@ function setupMessageHandler(chatClient) {
             // Update help command to include the new command for global ignore
             const helpCommands = [`${prefix}translate`, `${prefix}config`, `${prefix}exclude`, `${prefix}include`];
             
-            if (BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user === channelName) {
+            if (BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user.toLowerCase() === channelName) {
               helpCommands.push(`${prefix}globalignore`);
             }
             
@@ -903,7 +903,7 @@ function setupMessageHandler(chatClient) {
             
           case 'refreshtoken':
             // Only allow channel owner to manually refresh token
-            if (user !== channelName) {
+            if (user.toLowerCase() !== channelName) {
               return;
             }
             
