@@ -458,6 +458,36 @@ const sanitizeText = (text) => {
   return sanitized;
 };
 
+// Check if a word is an emote (surrounded by colons)
+const isEmote = (word) => {
+  return /^:[a-zA-Z0-9_]+:$/.test(word);
+};
+
+// Remove or replace emotes in a message
+const processEmotes = (message) => {
+  if (!message) return { processed: '', hasEmotes: false, emotes: [] };
+  
+  const words = message.split(/\s+/);
+  const emotes = [];
+  let hasEmotes = false;
+  
+  // Process each word to identify emotes
+  const processedWords = words.map(word => {
+    if (isEmote(word)) {
+      hasEmotes = true;
+      emotes.push(word);
+      return '{EMOTE}'; // Replace with placeholder
+    }
+    return word;
+  });
+  
+  return {
+    processed: processedWords.join(' '),
+    hasEmotes,
+    emotes
+  };
+};
+
 // Check if we should translate (rate limiting)
 const shouldTranslate = (channelName) => {
   const now = Date.now();
@@ -663,6 +693,15 @@ function setupMessageHandler(chatClient) {
         // Check if commands are enabled
         if (!channelConfig.respondToCommands) return;
         
+        // Parse command and arguments
+        const args = message.slice(prefix.length).trim().split(/\s+/);
+        const command = args.shift().toLowerCase();
+        
+        // Check if the command is moderator-only and user is not a mod
+        if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
+          return;
+        }
+        
         // Special global ignore commands that can only be used by the bot owner or channel owner
         const isOwner = BOT_OWNER_ID ? user.toLowerCase() === BOT_OWNER_ID.toLowerCase() : user === channelName;
         
@@ -723,15 +762,6 @@ function setupMessageHandler(chatClient) {
           
           return;
         }
-        
-        // Check if the command is moderator-only and user is not a mod
-        if (channelConfig.moderatorOnly && !msg.userInfo.isMod && user !== channelName) {
-          return;
-        }
-        
-        // Parse command and arguments
-        const args = message.slice(prefix.length).trim().split(/\s+/);
-        const command = args.shift().toLowerCase();
         
         switch (command) {
           case 'translate':
@@ -905,8 +935,17 @@ function setupMessageHandler(chatClient) {
       // Skip if message is too short
       if (!message || message.length < 5) return;
       
+      // Process emotes in the message
+      const emoteData = processEmotes(message);
+      
+      // Skip if message is only emotes
+      if (emoteData.hasEmotes && emoteData.processed.trim().replace(/\{EMOTE\}/g, '').length < 5) {
+        debug('Skipping message containing only emotes');
+        return;
+      }
+      
       // Sanitize the input (remove potentially harmful content)
-      const sanitizedMessage = sanitizeText(message);
+      const sanitizedMessage = sanitizeText(emoteData.processed);
       
       // Skip inappropriate messages
       if (isInappropriateMessage(sanitizedMessage)) {
@@ -973,6 +1012,17 @@ function setupMessageHandler(chatClient) {
       if (!translatedText) {
         debug('Empty translation result, skipping');
         return;
+      }
+      
+      // Restore emotes if needed
+      if (emoteData.hasEmotes) {
+        // Replace {EMOTE} placeholders with actual emotes
+        let emoteIndex = 0;
+        translatedText = translatedText.replace(/\{EMOTE\}/g, () => {
+          const emote = emoteData.emotes[emoteIndex] || '';
+          emoteIndex++;
+          return emote;
+        });
       }
       
       // Format the response
