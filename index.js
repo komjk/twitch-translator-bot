@@ -325,21 +325,26 @@ async function main() {
       process.exit(1);
     }
 
-    // Set up authentication
+    // Set up authentication with improved token handling
     const authProvider = new RefreshingAuthProvider({
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
       onRefresh: async (userId, newTokenData) => {
         console.log(`Refreshed tokens for user ${userId}`);
+        // You could save the new tokens here if desired
       }
     });
 
+    // Use a unique userId (can be anything consistent)
+    const userId = BOT_USERNAME.toLowerCase();
+    
     await authProvider.addUserForToken({
       accessToken: ACCESS_TOKEN,
       refreshToken: REFRESH_TOKEN,
-      expiresIn: 0, // Force refresh to get actual expiration
-      obtainmentTimestamp: 0 // Force refresh to get actual obtainment timestamp
-    }, ['chat']);
+      // Don't force immediate refresh - let the library handle token expiration
+      expiresIn: null,
+      obtainmentTimestamp: Date.now()
+    }, ['chat:read', 'chat:edit']);
 
     // Create API client
     const apiClient = new ApiClient({ authProvider });
