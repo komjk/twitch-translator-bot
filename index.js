@@ -11,6 +11,8 @@ const path = require('path');
 // Configuration
 const BOT_USERNAME = process.env.TWITCH_USERNAME;
 const OAUTH_TOKEN = process.env.TWITCH_OAUTH_TOKEN;
+const CLIENT_ID = process.env.TWITCH_CLIENT_ID;
+const CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET;
 const CHANNELS = process.env.TWITCH_CHANNELS ? process.env.TWITCH_CHANNELS.split(',') : [];
 const DEBUG = process.env.DEBUG === 'true';
 const RECONNECT_INTERVAL = 48 * 60 * 60 * 1000; // 48 hours in milliseconds
@@ -281,8 +283,13 @@ if (CHANNELS.length === 0) {
 }
 
 // Check for valid authentication
-if (!BOT_USERNAME || !OAUTH_TOKEN || !OAUTH_TOKEN.startsWith('oauth:')) {
-  console.error('Error: Invalid Twitch credentials. Make sure TWITCH_USERNAME is set and TWITCH_OAUTH_TOKEN starts with "oauth:"');
+const hasOAuthAuth = BOT_USERNAME && OAUTH_TOKEN && OAUTH_TOKEN.startsWith('oauth:');
+const hasClientAuth = CLIENT_ID && CLIENT_SECRET;
+
+if (!hasOAuthAuth && !hasClientAuth) {
+  console.error('Error: Invalid Twitch credentials. You must provide either:');
+  console.error('1. TWITCH_USERNAME and TWITCH_OAUTH_TOKEN (oauth: prefixed), or');
+  console.error('2. TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET');
   process.exit(1);
 }
 
@@ -290,7 +297,7 @@ if (!BOT_USERNAME || !OAUTH_TOKEN || !OAUTH_TOKEN.startsWith('oauth:')) {
 channelConfigs.init();
 
 // Configure the Twitch client - comply with rate limits
-const client = new tmi.Client({
+const clientOptions = {
   options: { 
     debug: DEBUG,
     // Respect Twitch rate limits
@@ -300,12 +307,25 @@ const client = new tmi.Client({
     reconnect: true,
     secure: true
   },
-  identity: {
+  channels: CHANNELS
+};
+
+// Add authentication method based on provided credentials
+if (hasOAuthAuth) {
+  clientOptions.identity = {
     username: BOT_USERNAME,
     password: OAUTH_TOKEN
-  },
-  channels: CHANNELS
-});
+  };
+  debug('Using username/OAuth token authentication');
+} else if (hasClientAuth) {
+  clientOptions.identity = {
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET
+  };
+  debug('Using client ID/secret authentication');
+}
+
+const client = new tmi.Client(clientOptions);
 
 // Connect to Twitch
 const connectToTwitch = () => {
